@@ -126,7 +126,7 @@ while ($_ = <STDIN>) {
 		next;
 	}
 	my $type = substr($_, 0, 1);
-	if ($type !~ /^[.\&=+\@'^CZ:36]/) {
+	if ($type !~ /^[.\&=+\@'^CZ:36S]/) {
 		print STDERR "Warning: ignored unknown record type '$type'\n";
 		next;
 	}
@@ -173,6 +173,12 @@ while ($_ = <STDIN>) {
 	} elsif ($type eq 'C') {
 		# Cfqdn:p:ttl:timestamp:lo
 		$rec->addCNAME($stuff[0], $stuff[1], $stuff[2], $stuff[3]);
+	} elsif ($type eq 'S') {
+		# Sfqdn:ip:x:port:weight:priority:ttl:timestamp:lo
+		my $srv = $stuff[1];
+		if ($srv !~ /\./) { $srv .= ".srv.$dom"; }
+		$rec->addSRV($srv, $stuff[2], $stuff[3], $stuff[4], $stuff[5], $stuff[6], $stuff[7]);
+		&addA($srv, $stuff[0], $stuff[3], $stuff[4], $stuff[5]);
 	} elsif ($type eq 'Z') {
 		# Zfqdn:mname:rname:ser:ref:ret:exp:min:ttl:timestamp:lo
 		$rec->addSOA($stuff[0], $stuff[1], $stuff[2], $stuff[3], $stuff[4], $stuff[5], $stuff[6], $stuff[7], $stuff[8], $stuff[9]);
@@ -200,7 +206,7 @@ foreach my $rec (values %main::names) {
 foreach my $zone (@main::zones) {
 	my $rec = $main::names{$zone};
 	if (!exists($rec->{keys})) {
-		print STDERR "Info: ignore unsigned zone $zone\n";
+		#print STDERR "Info: ignore unsigned zone $zone\n";
 		foreach my $dom (keys %{$rec->{zone}}) {
 			delete $main::names{$dom};
 		}
@@ -515,9 +521,16 @@ my ($self, $ip, $ttl, $ts, $lo) = @_;
 	$self->addRecord(28, pack("H*", $ip), $ttl, $ts, $lo);
 }
 
+sub addSRV {
+my ($self, $nm, $prt, $wei, $pri, $ttl, $ts, $lo) = @_;
+
+	$self->addRecord(33, pack("n*", $wei || 0, $pri || 0, $prt || 0).&toDomain($nm), $ttl, $ts, $lo);
+}
+
 sub toDomain {
 my $name = shift;
 
+	($name eq ".") && return "\0";
 	$name =~ tr/A-Z/a-z/;
 	my $res = "";
 	while ($name =~ /^([^.]*)\./) {
