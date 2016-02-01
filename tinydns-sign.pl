@@ -1,6 +1,7 @@
 #!/usr/bin/perl -w
 
 # Copyright (C) 2012,2015 Peter Conrad <conrad@quisquis.de>
+# Copyright (C) 2016 Steven Moore <sm@qrmn.uk>
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 3 as
@@ -16,9 +17,13 @@
 
 use strict;
 use Fcntl;
-use Digest::SHA qw(sha1 sha1_hex);
-use Crypt::OpenSSL::RSA;
+use Digest::SHA qw( sha1 sha1_hex sha256 sha256_hex );
+use Crypt::OpenSSL::Bignum;
+use Crypt::OpenSSL::EC;
+use Crypt::OpenSSL::ECDSA;
 use MIME::Base64;
+
+my $ctx = Crypt::OpenSSL::Bignum::CTX->new();
 
 $main::ttl = 432000;
 %main::keys = ();
@@ -36,12 +41,12 @@ while ($#ARGV >= 0) {
 		$main::ttl = $ARGV[1];
 		shift @ARGV;
 	} elsif ($ARGV[0] eq '-g') {
-		if ($#ARGV != 5) { &usage(); }
-		&genkey($ARGV[1], $ARGV[2], $ARGV[3], $ARGV[4], $ARGV[5]);
+		if ($#ARGV != 3) { &usage(); }
+		&genkey($ARGV[1], $ARGV[2], $ARGV[3]);
 		# genkey does not return
 		exit(0);
 	} else { # keyfile
-		&addKey($ARGV[0]);
+		&loadKey($ARGV[0]);
 	}
 	shift @ARGV;
 }
@@ -323,22 +328,20 @@ foreach my $zone (@main::zones) {
 					$toSign .= &wireName($name).&htons($type)."\0\1".&htonl($ttl)
 							  .&htons(length($rr->{rdata})).$rr->{rdata};
 				}
-				$key->{key}->{key}->use_pkcs1_padding();
-				if ($key->{alg} == 7) {
-					$key->{key}->{key}->use_sha1_hash();
-				} elsif ($key->{alg} == 8) {
-					$key->{key}->{key}->use_sha256_hash();
-				} elsif ($key->{alg} == 10) {
-					$key->{key}->{key}->use_sha512_hash();
-				} else {
+				if ($key->{alg} != 13) {
 					print STDERR "Unsupported key type ".$key->{alg}."\n";
 					exit 1;
 				}
-				my $sig = $key->{key}->{key}->sign($toSign);
-				if (!$sig || !$key->{key}->{key}->verify($toSign, $sig)) {
+				my $digest = sha256($toSign);
+				my $sigobj = Crypt::OpenSSL::ECDSA::ECDSA_do_sign( $digest, $key->{key}->{key} );
+				my ($r, $s) = ($sigobj->get_r, $sigobj->get_s);
+				my $rpad = 32 - length $r; my $spad = 32 - length $s;
+				my $sig = pack "x$rpad a* x$spad a*", $r, $s;
+				if (!$sig || !Crypt::OpenSSL::ECDSA::ECDSA_do_verify( $digest, $sigobj, $key->{key}->{key} )) {
 					print STDERR "Failed to sign $name ($type)!?\n";
 					exit 1;
 				}
+				$r=0; $s=0; $sigobj=0; $digest=0;
 				#$key->{key}->{key}->use_no_padding();
 				#print "# ".unpack("H*", $key->{key}->{key}->public_decrypt($sig))."\n";
 				$rdata .= $sig;
@@ -373,7 +376,7 @@ my ($self, $flags, $alg, $key) = @_;
 		print STDERR "$_\n";
 		exit 1;
 	}
-	if ($alg != 7 && $alg != 8 && $alg != 10) {
+	if ($alg != 13) {
 		print STDERR "Warning: ignoring DNSKEY with unsupported algorithm $alg\n";
 		return;
 	}
@@ -543,7 +546,7 @@ my $name = shift;
 package main;
 
 sub usage {
-	print STDERR "$0 -g <bits> <flags> <algorithm> <domain> <keyfile>\n";
+	print STDERR "$0 -g <flags> <domain> <keyfile>\n";
 	print STDERR " or\n";
 	print STDERR "$0 [-t <ttl>] [<keyfile> ...] <input >output\n";
 	exit(1);
@@ -742,14 +745,9 @@ sub genTypeBitmaps {
 }
 
 sub gen_pubkey_data {
-my ($n, $e, $flags, $alg, $dom) = @_;
+my ($enc, $flags, $alg, $dom) = @_;
 
-	my $e_bin = $e->to_bin();
-	$e_bin =~ s/^\0+//;
-	my $n_bin = $n->to_bin();
-	$n_bin =~ s/^\0+//;
-
-	my $pubkey = chr(length($e_bin)).$e_bin.$n_bin;
+	my $pubkey = $enc;
 	my $keytag = $flags + $alg + 3 * 256; # protocol is always 3
 	for (my $i = length($pubkey) - 1; $i >= 0; $i--) {
 		$keytag += ord(substr($pubkey, $i)) * (($i & 1) ? 1 : 256);
@@ -759,7 +757,7 @@ my ($n, $e, $flags, $alg, $dom) = @_;
 		$keytag &= 0xffff;
 	}
 	$dom =~ tr/A-Z/a-z/;
-	my $digest = sha1_hex(&wireName($dom).&htons($flags).chr(3).chr($alg).$pubkey);
+	my $digest = sha256_hex(&wireName($dom).&htons($flags).chr(3).chr($alg).$pubkey);
 	return ($keytag, $pubkey, $digest);
 }
 
@@ -792,59 +790,56 @@ my ($ip, $dom, $ttl, $ts, $lo) = @_;
 	$rec->addPTR($dom, $ttl, $ts, $lo);
 }
 
-sub addKey {
+sub loadKey {
 my ($file) = @_;
 
 	open(KEYFILE, "<$file") or die("Can't read $file either:");
-	my $rsa = Crypt::OpenSSL::RSA->new_private_key(join("", <KEYFILE>));
-	close KEYFILE;
-	if (!$rsa) {
-		print STDERR "Failed to read key from $file!\n";
-		exit(1);
+	my $key = Crypt::OpenSSL::EC::EC_KEY::new();
+	my $group = Crypt::OpenSSL::EC::EC_GROUP::new_by_curve_name(415); # secp256r1/prime256v1
+	$key->set_asn1_flag(OPENSSL_EC_NAMED_CURVE);
+	die "set_group failed in $file" unless $key->set_group($group);
+	while (my $line=<KEYFILE>) {
+		if ($line =~ /^#secp256r1:priv:([^:]+):/ ) {
+			my $bn = Crypt::OpenSSL::Bignum->new_from_bin(decode_base64($1));
+			die "set_private_key failed" unless $key->set_private_key($bn);
+			$bn=0;
+		}
+		if ($line =~ /^#secp256r1:pub:([^:]+):/ ) {
+			my $point = Crypt::OpenSSL::EC::EC_POINT::new($group);
+			my $enc = "\004".decode_base64($1);
+			die "oct2point failed in pub:$file" unless Crypt::OpenSSL::EC::EC_POINT::oct2point($group, $point, $enc, $ctx);
+			die "pub:$file is not on curve secp256r1" unless Crypt::OpenSSL::EC::EC_POINT::is_on_curve($group,$point, $ctx);
+			die "pub:$file is point at infinity on secp256r1" if Crypt::OpenSSL::EC::EC_POINT::is_at_infinity($group,$point);
+			die "set_public_key failed" unless $key->set_public_key($point);
+			$point=0;
+		}
 	}
-	my ($n, $e, $x1, $x2, $x3, $x4, $x5, $x6) = $rsa->get_key_parameters();
-	$x1 = $x2 = $x3 = $x4 = $x5 = $x6 = 0; # get rid of private stuff
-	my ($keytag, $keydata, $fp) = &gen_pubkey_data($n, $e, 0, 0, "");
-	$main::keys{$keydata} = { key => $rsa, basetag => $keytag };
+	close KEYFILE;
+	die "check_key failed in $file" unless $key->check_key();
+	my $point = $key->get0_public_key();
+	my $enc = substr(Crypt::OpenSSL::EC::EC_POINT::point2oct($group,$point,POINT_CONVERSION_UNCOMPRESSED, $ctx),1);
+	my ($keytag, $keydata, $fp) = &gen_pubkey_data($enc, 0, 0, "");
+	$main::keys{$keydata} = { key => $key, basetag => $keytag };
 }
 
 sub genkey {
-my ($bits, $flags, $alg, $dom, $file) = @_;
-
-	if ($bits < 1024 || $bits > 4096) {
-		print STDERR "ERROR: Keys of less than 1024 or more than 4096 bits are not supported!\n";
-		exit 1;
-	}
-
-	if ($alg != 7 && $alg != 8 && $alg != 10) {
-		print STDERR "ERROR: $0 only supports algorithms 7 (RSA-SHA1), 8 (RSA-SHA256)\nand 10 (RSA-SHA512).\n";
-		exit 1;
-	}
+my ($flags, $dom, $file) = @_;
 
 	if (sysopen(KEYFILE, $file, O_CREAT|O_EXCL|O_WRONLY, 0600)) {
-		my $rsa = Crypt::OpenSSL::RSA->generate_key($bits);
-		print KEYFILE $rsa->get_private_key_string();
-		my ($n, $e, $x1, $x2, $x3, $x4, $x5, $x6) = $rsa->get_key_parameters();
-		$x1 = $x2 = $x3 = $x4 = $x5 = $x6 = 0; # get rid of private stuff
-		my ($keytag, $keydata, $fp) = &gen_pubkey_data($n, $e, $flags, $alg, $dom);
-		print KEYFILE "#K$dom:$flags:3:$alg:".encode_base64($keydata, "").":::\n";
-		print KEYFILE "#D$dom:$keytag:$alg:1:${fp}:::\n";
+		my $key = Crypt::OpenSSL::EC::EC_KEY::new();
+		my $group = Crypt::OpenSSL::EC::EC_GROUP::new_by_curve_name(415); # secp256r1/prime256v1
+		$key->set_asn1_flag(OPENSSL_EC_NAMED_CURVE);
+		die "set_group failed" unless $key->set_group($group);
+		die "generate_key failed" unless $key->generate_key();
+		die "check_key failed" unless $key->check_key();
+		print KEYFILE "#secp256r1:priv:".encode_base64($key->get0_private_key()->to_bin(), "").":\n";
+		my $point = $key->get0_public_key();
+		my $enc = substr(Crypt::OpenSSL::EC::EC_POINT::point2oct($group,$point,POINT_CONVERSION_UNCOMPRESSED,$ctx),1);
+		print KEYFILE "#secp256r1:pub:".encode_base64($enc, "").":\n";
+		my ($keytag, $keydata, $fp) = &gen_pubkey_data($enc, $flags, 13, $dom);
+		print KEYFILE "#K$dom:$flags:3:13:".encode_base64($keydata, "").":::\n";
+		print KEYFILE "#D$dom:$keytag:13:2:${fp}:::\n";
 		close KEYFILE;
-	} else {
-		print STDERR "Warning: couldn't create $file: $!\n";
-		print STDERR "Attempting to read key...\n";
-		open(KEYFILE, "<$file") or die("Can't read $file either:");
-		my $rsa = Crypt::OpenSSL::RSA->new_private_key(join("", <KEYFILE>));
-		close KEYFILE;
-		if (!$rsa) {
-			print STDERR "Failed to read key from $file!\n";
-			exit(1);
-		}
-		my ($n, $e, $x1, $x2, $x3, $x4, $x5, $x6) = $rsa->get_key_parameters();
-		$x1 = $x2 = $x3 = $x4 = $x5 = $x6 = 0; # get rid of private stuff
-		my ($keytag, $keydata, $fp) = &gen_pubkey_data($n, $e, $flags, $alg, $dom);
-		print "#K$dom:$flags:3:$alg:".encode_base64($keydata, "").":::\n";
-		print "#D$dom:$keytag:$alg:1:${fp}:::\n";
 	}
 	exit 0;
 }
@@ -857,18 +852,19 @@ tinydns-sign - Signs records in L<tinydns-data(8)> files
 
 =head1 SYNOPSIS
 
-	tinydns-sign -g bits flags algorithm domain keyfile
+	tinydns-sign -g flags domain keyfile
 
 	tinydns-sign [-t ttl] [keyfile ...] <infile >outfile
 
 =head1 DESCRIPTION
 
-The first form is used to generate a public/private RSA key pair with a
-modulus of length I<bits>. If F<keyfile> exists, tinydns-sign will try to
-read a private key from the file and print DS and DNSKEY pseudo-records for
-the corresponding public key on stdout. If F<keyfile> does not exist,
-tinydns-sign will generate a new key pair and write the key plus the
-corresponding pseudo-records to F<keyfile>.
+The first form (-g) is used to generate an ECDSAP256SHA256 public/private key
+pair and write the key pair, plus the corresponding DS and DNSKEY pseudo-
+records, to F<keyfile>.
+
+The private key is marked with #secp256r1:priv:<base64-private-key>: and the
+public key is similarly marked with #secp256r1:pub:<base64-public-key>:.
+
 
 In the second form, tinydns-sign reads key pairs from each given F<keyfile>.
 It then reads a L<tinydns-data(8)> file from STDIN and writes the same
@@ -931,9 +927,8 @@ Currently, pseudo-records are defined for the following RR-types:
 
 This generates a DNSKEY record for I<name>. I<flags>. I<proto> and I<algorithm>
 are decimal numbers. At the time of writing, I<proto> must be 3. tinydns-sign
-only supports I<algorithm>s 7 (RSA-SHA1), 8 (RSA-SHA256) and 10 (RSA-SHA512).
-I<key> is base-64 encoded key material, depending on the selected
-I<algorithm>. I<ttl>, I<timestamp> and I<lo> are as usual.
+only supports I<algorithm> 13 (ECDSAP256SHA256). I<key> is base-64 encoded key
+material. I<ttl>, I<timestamp> and I<lo> are as usual.
 
 It is an error to have a DNSKEY pseudo-record in the input without a
 corresponding F<keyfile> containing the matching private key.
@@ -973,9 +968,10 @@ input file.
 =head1 SEE ALSO
 
 L<tinydns-data(8)>,
-L<RFC-4034|http://tools.ietf.org/html/rfc4034>,
-L<RFC-4035|http://tools.ietf.org/html/rfc4035>,
-L<RFC-5155|http://tools.ietf.org/html/rfc5155>
+L<RFC-4034|https://tools.ietf.org/html/rfc4034>,
+L<RFC-4035|https://tools.ietf.org/html/rfc4035>,
+L<RFC-5155|https://tools.ietf.org/html/rfc5155>,
+L<RFC-6605|https://tools.ietf.org/html/rfc6605>
 
 =head1 LIMITATIONS
 
@@ -1001,11 +997,18 @@ for a typical domain, but it would be a problem if tinydns were to serve the
 .de zone, for example. Also, the list is searched sequentially, which can
 cause a performance impact long before this limit is reached.
 
+=item * RSA support has been removed, due to the highly significant (4x-6x) size
+advantage of ECDSA signatures.
+
 =back
 
 =head1 CAVEATS
 
 =over
+
+=item * ECDSA signatures require a strongly-seeded entropy source. Never run
+tinydns-sign until /dev/random has at least 256 bits of good entropy, else key
+disclosure may result.
 
 =item * The system clock should be reasonably close to UTC (i. e. within a few minutes).
 
@@ -1021,6 +1024,7 @@ a requirement in RFC-4035 section 2.2.
 =head1 AUTHOR
 
 (C) 2012 Peter Conrad L<mailto:conrad@quisquis.de>
+(C) 2016 Steven Moore L<mailto:sm@qrmn.uk>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License version 3 as
