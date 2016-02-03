@@ -20,6 +20,7 @@ void hier()
   c(auto_home,"bin","rbldns",-1,-1,0755);
   c(auto_home,"bin","pickdns",-1,-1,0755);
   c(auto_home,"bin","axfrdns",-1,-1,0755);
+  c(auto_home,"bin","tcpdns",-1,-1,0755);
 
   c(auto_home,"bin","tinydns-get",-1,-1,0755);
   c(auto_home,"bin","tinydns-data",-1,-1,0755);

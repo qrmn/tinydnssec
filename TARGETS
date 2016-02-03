@@ -245,3 +245,5 @@ sha1.o
 base32hex.o
 printtype.o
 edns0.o
+tcpdns.o
+tcpdns

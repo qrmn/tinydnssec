@@ -56,7 +56,7 @@ prot.o timeoutread.o timeoutwrite.o clientloc.o dns.a libtai.a alloc.a env.a \
 cdb.a buffer.a unix.a byte.a sha1.o base32hex.o edns0.o
 	./load axfrdns iopause.o droproot.o tdlookup.o response.o \
 	qlog.o prot.o timeoutread.o timeoutwrite.o clientloc.o dns.a libtai.a \
-	alloc.a env.a cdb.a buffer.a unix.a byte.a  sha1.o base32hex.o edns0.o
+	alloc.a env.a cdb.a buffer.a unix.a byte.a sha1.o base32hex.o edns0.o
 
 axfrdns-conf: \
 load axfrdns-conf.o generic-conf.o auto_home.o buffer.a unix.a byte.a
@@ -753,7 +753,7 @@ dnscache-conf dnscache walldns-conf walldns rbldns-conf rbldns \
 rbldns-data pickdns-conf pickdns pickdns-data tinydns-conf tinydns \
 tinydns-data tinydns-get tinydns-edit axfr-get axfrdns-conf axfrdns \
 dnsip dnsipq dnsname dnstxt dnsmx dnsfilter random-ip dnsqr dnsq \
-dnstrace dnstracesort cachetest utime rts dnsip6 dnsip6q
+dnstrace dnstracesort cachetest utime rts dnsip6 dnsip6q tcpdns
 
 prot.o: \
 compile prot.c hasshsgr.h prot.h
@@ -1086,6 +1086,22 @@ compile taia_tai.c taia.h tai.h uint64.h
 taia_uint.o: \
 compile taia_uint.c taia.h tai.h uint64.h
 	./compile taia_uint.c
+
+tcpdns: \
+load tcpdns.o iopause.o droproot.o tdlookup.o response.o qlog.o \
+prot.o timeoutread.o timeoutwrite.o clientloc.o dns.a libtai.a alloc.a env.a \
+cdb.a buffer.a unix.a byte.a sha1.o base32hex.o edns0.o
+	./load tcpdns iopause.o droproot.o tdlookup.o response.o \
+	qlog.o prot.o timeoutread.o timeoutwrite.o clientloc.o dns.a libtai.a \
+	alloc.a env.a cdb.a buffer.a unix.a byte.a sha1.o base32hex.o edns0.o
+
+tcpdns.o: \
+compile tcpdns.c droproot.h exit.h env.h uint32.h uint16.h ip4.h \
+tai.h uint64.h buffer.h timeoutread.h timeoutwrite.h open.h seek.h \
+cdb.h uint32.h stralloc.h gen_alloc.h strerr.h str.h byte.h case.h \
+dns.h stralloc.h iopause.h taia.h tai.h taia.h scan.h qlog.h uint16.h \
+response.h uint32.h clientloc.h
+	./compile tcpdns.c
 
 tdlookup.o: \
 compile tdlookup.c uint16.h open.h tai.h uint64.h cdb.h uint32.h \
