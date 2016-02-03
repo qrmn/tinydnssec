@@ -1,0 +1,15 @@
+[Unit]
+Description=djbdns TCP socket
+
+[Socket]
+ListenStream=[%i]:53
+Accept=yes
+NoDelay=yes
+DeferAcceptSec=5
+ReceiveBuffer=512
+SendBuffer=1500
+IPTOS=low-delay
+FreeBind=yes
+
+[Install]
+WantedBy=sockets.target

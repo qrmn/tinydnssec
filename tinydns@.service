@@ -1,0 +1,15 @@
+[Unit]
+Description=djbdns UDP server
+
+[Service]
+Environment="IP=%i"
+Environment="ROOT=/srv/dns/live"
+Environment="UID=54"
+Environment="GID=53"
+MemoryLimit=800000
+ExecStart=/usr/local/bin/tinydns
+Restart=on-failure
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes

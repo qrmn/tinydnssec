@@ -1,0 +1,17 @@
+[Unit]
+Description=djbdns TCP server
+JobTimeoutSec=10
+
+[Service]
+Environment="ROOT=/srv/dns/live"
+Environment="UID=55"
+Environment="GID=53"
+ExecStart=/usr/local/bin/tcpdns
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+MemoryLimit=800000
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
