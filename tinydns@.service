@@ -13,3 +13,4 @@ ProtectSystem=full
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
+RestartSec=5
