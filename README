@@ -1,7 +1,13 @@
 djbdns 1.05
 20010211
-Copyright 2001
+Released into public domain
 D. J. Bernstein
 
 djbdns home page: http://cr.yp.to/djbdns.html
 Installation instructions: http://cr.yp.to/djbdns/install.html
+
+With added patches:
+ - IPv6 patches from fefe
+ - tinydns-data SRV & axfr-get SRV/PTR patches from Michael Handler
+ - DNSSEC patches from Peter Conrad (GPLv3)
+ - DNSSEC secp256r1 conversation by Steven Moore
